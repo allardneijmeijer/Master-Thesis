@@ -117,4 +117,3 @@ print(test.machine.state)
 test.machine.repair()
 print(test.machine.state)
 print("piet")
-
