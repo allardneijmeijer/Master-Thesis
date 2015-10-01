@@ -93,21 +93,18 @@ class FSM(Node):
         self.name = name
         state = ['operational', 'unscheduled', 'scheduled']
         Machine.__init__(self,states=state,initial='operational')
-        self.add_transition('repair', '*', 'operational',before='printer1')
+        self.add_transition('repair', '*', 'operational')
         self.add_transition('breaku','operational','unscheduled')
         self.add_transition('breaks','operational','scheduled')
 
-    def printer(self):
-        print('Succes!')
-
-
 class Server(FSM):
-    def __init__(self, serviceTime, numServers):
+    def __init__(self, serviceTime, numServers, mtbf, repairtime):
         super(Server, self).__init__("Server")
         self.serviceTime = serviceTime
         self.numServers = numServers
-        #self.mtbf = mtbf
-        #self.repairtime = repairtime
+        self.mtbf = mtbf
+        self.repairtime = repairtime
+        self.numfailures = 0
 
         self.busyServers = 0
 
@@ -122,6 +119,10 @@ class Server(FSM):
             else:
                 self.queue.add(m)
             self.arrivalStats()
+        if "failure" in m.message:
+            self.numfailures += 1
+            self.breaku()
+            #self.generateFailure(expon(scale = 1./0.1))
         elif m.message == "end":
             self.send(m.job)
             if len(self.queue) > 0:
@@ -133,8 +134,8 @@ class Server(FSM):
             self.departureStats()
 
     def generateFailure(self, mtbf):
-        tFail = mtbf.rvs()
-        m = Message(self, self.Out, timeFail, message = "failure")
+        tFail = now() + mtbf.rvs()
+        m = Message(self, self, tFail, message = "failure")
         schedule( m )
 
     def send(self, m):  # job departure
@@ -148,8 +149,8 @@ class Server(FSM):
         pass
 
 class Fifo(Server):
-    def __init__(self, serviceTime, numServers=1):
-        super(Fifo, self).__init__( serviceTime, numServers)
+    def __init__(self, serviceTime, numServers=1, mtbf=1, repairtime=1):
+        super(Fifo, self).__init__( serviceTime, numServers, mtbf, repairtime)
         self.queue = SortedSet(key = lambda job: job.time)
 
 class Sink(Node):
@@ -169,13 +170,16 @@ interarrivaltime = expon(scale = 1./labda)
 serviceTime = expon(scale = 1./mu)
 
 sender = Sender(interarrivaltime, totalJobs = 1e4)
-srv = Fifo(serviceTime, numServers = 1)
+srv = Fifo(serviceTime, numServers = 1, mtbf = 5, repairtime = 2)
 sink = Sink()
 
 sender.Out = srv
 #queue.In = sender
 srv.Out = sink
 #sink.In = queue
+
+m = Message(sender, srv, 1, message = "failure")
+schedule( m )
 
 scheduler.Run()
 
