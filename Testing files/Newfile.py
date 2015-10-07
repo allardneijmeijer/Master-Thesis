@@ -37,7 +37,7 @@ class Scheduler(SortedSet):
         return m
 
     def Run(self):
-        while len(self):
+        while len(self) and now()<10000:
             m = self.pop()
 
     def printSelf(self):
@@ -93,7 +93,7 @@ class FSM(Node):
         self.name = name
         state = ['operational', 'unscheduled', 'scheduled']
         Machine.__init__(self,states=state,initial='operational')
-        self.add_transition('repair', '*', 'operational')
+        self.add_transition('repair', '*', 'operational',after='generateFailure')
         self.add_transition('breaku','operational','unscheduled')
         self.add_transition('breaks','operational','scheduled')
 
@@ -122,7 +122,11 @@ class Server(FSM):
         if "failure" in m.message:
             self.numfailures += 1
             self.breaku()
-            #self.generateFailure(expon(scale = 1./0.1))
+            t = now() + self.repairtime.rvs()
+            schedule(Message(self, self, t, job = m, message = "repair"))
+        if "repair" in m.message:
+            self.repair()
+
         elif m.message == "end":
             self.send(m.job)
             if len(self.queue) > 0:
@@ -133,10 +137,15 @@ class Server(FSM):
                 self.busyServers -= 1
             self.departureStats()
 
-    def generateFailure(self, mtbf):
+    def generateFailure(self, mtbf=expon(scale=1./0.001)):
         tFail = now() + mtbf.rvs()
         m = Message(self, self, tFail, message = "failure")
         schedule( m )
+        print('failure',tFail)
+
+    def repair(self):
+        self.repair()
+        #self.generateFailure(expon(scale = 1./0.1))
 
     def send(self, m):  # job departure
         m.f, m.t, m.time = self, self.Out, now()
@@ -168,9 +177,10 @@ scheduler = Scheduler()
 labda, mu = 1., 1.3
 interarrivaltime = expon(scale = 1./labda)
 serviceTime = expon(scale = 1./mu)
+repairtime = expon(scale = 1./0.05)
 
 sender = Sender(interarrivaltime, totalJobs = 1e4)
-srv = Fifo(serviceTime, numServers = 1, mtbf = 5, repairtime = 2)
+srv = Fifo(serviceTime, numServers = 1, mtbf = 5, repairtime = repairtime)
 sink = Sink()
 
 sender.Out = srv
@@ -187,3 +197,4 @@ rho = labda/mu
 S = sum(srv.count.values())
 for i, v in  srv.count.items():
     print(i, v*1./S, (1.-rho)*rho**i)
+print('failures: ',srv.numfailures)
