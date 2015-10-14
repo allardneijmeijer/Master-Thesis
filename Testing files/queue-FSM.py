@@ -1,39 +1,24 @@
+
 import heapq
 from sortedcontainers import SortedSet
-from transitions import Machine
-
-class FSM(Machine):
-    def __init__(self):
-        Machine.__init__(self)
-        Machine.add_states(self,['operational', 'unscheduled', 'scheduled'])
-        Machine.set_state(self,'operational')
-        self.add_transition('repair', '*', 'operational')
-        self.add_transition('breaku','operational','unscheduled')
-        self.add_transition('breaks','operational','scheduled')
-
 
 class Job(object):
-    __slots__ = ['Id', 'a', 's', 't', 'p']
-    def __init__(self, Id, a, s, t, p):
+    __slots__ = ['Id', 'a', 's', 'p']
+    
+    def __init__(self, Id, a, s, p):
         self.Id = Id # id 
         self.a  = a # arrival time
         self.s = s # service time
-        self.t = t # job type
         self.p = p # priority
 
 #from collections import namedtuple
 #event = namedtuple('Event', ['t', 'type', 'j'])
 
-class Server(object):       # class not used yet
-    def __init__(self):
-        busy = False
-        self.machine = FSM()
-
 class Event(object):
     __slots__ = ['t', 'type', 'j', 'q', 'b']
     def __init__(self, t, type, j):
         self.t = t  # time
-        self.type = type  #valid types: a arrrival, d departure, m maintenance, r repair, j is job
+        self.type = type  #valid types: a arrrival, d departure, j is job
         self.j =  j # job
         self.q = 0 # queue length
         self.b = 0 # number of busy servers
@@ -45,26 +30,13 @@ class Queue(object):
         self.queue = None
         self.logbook = SortedSet(key = lambda e: e.t)
         #self.events = SortedSet(key = lambda e: e.t)
-        self.events = []
-        self.machine = FSM()    #define state machine for queue server
+        self.events = [] 
 
     def addJobs(self, jobs):
         for j in jobs:
             #self.events.add( Event(t = j.a, type = 'a', j = j))
             heapq.heappush(self.events, (j.a, Event(t = j.a, type = 'a', j = j) ) )
-            
-    def addMaintenance(self, time):
-        Id = len(jobs) + 1
-        job = Job(Id,time,1,m,1)
-        heapqq.heappush(self.events, (time, Event(t=time, type = 'm', j = job) ) )
-
-    def addRepair(self, t):
-        Id = len(jobs) + 1
-        job = Job(Id,time,1,r,1)
-        heapqq.heappush(self.events, (time, Event(t=time, type = 'r', j = job) ) )
-        
-    # def completeRepair(self,t)
-        
+            print(j.a)
 
     def run(self):
         while self.events:
@@ -86,10 +58,6 @@ class Queue(object):
                     heapq.heappush(self.events, (now+j.s, Event(t = now+j.s, type = 'd', j = j)))
                 else: # server becomes free as there is no job in queue
                     self.busyServers -= 1 # server is empty
-            elif e.type == 'm': # maintenance action
-                a = 1 # random crap
-            elif e.type == 'r': # repair action
-                a = 1 # random crap
             self.log(e)
 
     # The rest is statistics collection
@@ -109,11 +77,84 @@ class Queue(object):
     
     def departureTimes(self):
         return [e.t for e in self.logbook if e.type == "d"]
-        
-test = Queue()
-print(test.machine.state)
-test.machine.breaku()
-print(test.machine.state)
-test.machine.repair()
-print(test.machine.state)
-print("piet")
+
+class Fifo(Queue):
+    def __init__(self, numServers = 1):
+        super(Fifo, self).__init__()
+        self.numServers = numServers
+        self.queue = SortedSet(key = lambda job: job.a)
+
+class Lifo(Queue):
+    def __init__(self, numServers = 1):
+        super(Lifo, self).__init__()
+        self.numServers = numServers
+        self.queue = SortedSet(key = lambda job: -job.a)
+
+class SPTF(Queue):
+    def __init__(self, numServers = 1):
+        super(SPTF, self).__init__()
+        self.numServers = numServers
+        self.queue = SortedSet(key = lambda job: job.s)
+
+class LPTF(Queue):
+    def __init__(self, numServers = 1):
+        super(LPFT, self).__init__()
+        self.numServers = numServers
+        self.queue = SortedSet(key = lambda job: -job.s)
+
+class Priority(Queue):
+    def __init__(self, numServers = 1):
+        super(Priority, self).__init__()
+        self.numServers = numServers
+        self.queue = SortedSet(key = lambda job: job.p)
+
+
+    import  numpy as np
+    from scipy.stats import expon
+    import matplotlib.pylab as plt
+
+    np.random.seed(3)
+
+    def makeJobs(num, F, G):
+        jobs = set()
+        A = 0 # arrival times
+        for i in range(num):
+            A += F.rvs()
+            s = G.rvs()
+            jobs.add( Job(i, A, s, p=1) )
+        return jobs
+
+    labda = 2.
+    mu = 2.1
+    F = expon(scale = 1./labda)
+    G = expon(scale = 1./mu)
+
+    print(F.mean())
+    print(G.mean())
+
+    fifo = Fifo()
+
+    numJobs = 400
+    jobs = makeJobs(numJobs, F, G)
+    fifo.addJobs(jobs)
+
+    fifo.run()
+
+
+    qa = fifo.arrivalTimes()
+    qd = fifo.departureTimes()
+    
+    plt.plot(qa)
+    plt.plot(qd)
+    plt.show()
+
+    qa = fifo.queueAtArrivalMoments()
+    qd = fifo.queueAtDepartureMoments()
+
+    print(np.average(qa))
+    print(np.average(qd))
+    
+    plt.plot(qa)
+    plt.plot(qd)
+    plt.show()
+

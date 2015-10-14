@@ -24,7 +24,7 @@ class Scheduler(SortedSet):
         self.supadd = self.sup.add
         self.suppop = self.sup.pop
         self.endOfSimultationTime = np.inf
-        self.now = 0.
+        self.now = 0
 
     def add(self, m):
         if now() < self.endOfSimultationTime:
