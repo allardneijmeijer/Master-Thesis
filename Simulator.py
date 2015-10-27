@@ -1,3 +1,5 @@
+# Developed using Python 3.4.3
+
 from scipy.stats import expon
 # from collections import defaultdict
 from sortedcontainers import SortedSet
@@ -44,6 +46,7 @@ class Job(object):
         self.qstart = 0             # used to compute queueing time
         self.qstop = 0              # used to compute queueing time
         self.event = None           # event associated with job
+        self.routing = []
 
     def __str__(self):
         return "Job nr. {} is being served".format(self.nr)
@@ -79,10 +82,11 @@ class Server(Machine):
         self.add_transition('stop', 'Processing', 'Idle', after='stopprocessing')
         self.add_transition('maintain', 'Idle', 'Maintenance', before='startprocessing')
         self.add_transition('finish', 'Maintenance', 'Idle', after='stopprocessing')
+
         self.activeJob = None
         self.eventStack = stack
         self.queue = Queue()        # will be implemented differently in G\G\n
-        #self.generateMaintenance()
+        self.generateMaintenance()
         self.maintenanceScheduled = None
         self.delayedJob = None
         self.generateFailure()
@@ -137,6 +141,10 @@ class Server(Machine):
         self.startprocessing(job)
 
     def repaired(self):
+        """
+
+        :return:
+        """
         self.activeJob = self.delayedJob
         self.delayedJob = None
 
@@ -210,6 +218,8 @@ class Stack(SortedSet):
         :return:
         """
         while self:
+            self.printCont()
+            print("--------")
             a = self.stackpop(0)
 
             # debugging output
@@ -223,8 +233,8 @@ class Stack(SortedSet):
                 tstop = a.job.service + self.now
                 self.addEvent(tstop, 'f', a.job)
                 #debugging output
-                self.printCont()
-                print("-------")
+                #self.printCont()
+                #print("-------")
             elif a.event == 'a' and not(a.job.server.is_Idle()):
                 a.job.qstart = self.now
                 a.job.server.queue.add(a.job)
@@ -238,7 +248,7 @@ class Stack(SortedSet):
                 a.job.server.finish()
             elif a.event == 'fail':
                 print('fail!')
-                self.printCont()
+                #self.printCont()
                 a.job.server.fail(a.job)
             elif a.event == 'repair':
                 if a.job.server.delayedJob:
@@ -249,6 +259,10 @@ class Stack(SortedSet):
                     a.job.server.repair()
 
     def printCont(self):
+        """
+        For debugging purposes. Lists all events in the event-stack
+        :return:
+        """
         b = list(iter(self))
         for i, item in enumerate(b):
             print(b[i].time, b[i].job.service, b[i].event)

@@ -41,7 +41,7 @@ class Scheduler(SortedSet):
             m = self.pop()
 
     def printSelf(self):
-        print(now())
+        print(self.now)
         for s in self:
             print(s.f, s.t, s.time)
 
