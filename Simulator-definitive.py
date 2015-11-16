@@ -64,6 +64,8 @@ class Job:
         self.serviceTime = 0
         self.priority = priority
         self.logging = []
+        self.arrival = 0
+        self.exit = 0
 
     def log(self, *args):
         self.logging.append(args)
@@ -109,6 +111,7 @@ class Source(Node):
     def send(self):
         self.numSentJobs += 1
         job = Job(name="job: {}".format(self.numSentJobs))
+        job.arrival = now()
         m = Event(self, self.Out, now(), job, event="job")
         schedule(m)
 
@@ -140,7 +143,7 @@ class Server(Node, Machine):
         self.add_transition('unblocki', 'Blocked', 'Idle')
         self.add_transition('unblockp', 'Blocked', 'Processing')
         self.activeJob = None
-        self.maxQueue = 5
+        self.maxQueue = 10
         self.numServers = 1
         self.busyServers = 0
         self.queue = None
@@ -148,7 +151,6 @@ class Server(Node, Machine):
         self.observers = []
         self.jobsprocessed = 0
         self.jobsReceived = 0
-        self.blocked = False
 
     def receive(self, m):
         # print("event = {}".format(m.event))
@@ -237,9 +239,11 @@ class Server(Node, Machine):
             if self.activeJob:
                 self.unblockp()
             else:
-                print('idle')
+                self.unblocki()
+                #print('idle')
         else:
-            print('Not Blocked')
+            pass
+            # print('Not Blocked')
 
 
 class Sink(Node):
@@ -250,6 +254,8 @@ class Sink(Node):
 
     def receive(self, m):
         self.jobsreceived +=1
+        m.job.exit = now()
+        m.job.flowtime = m.job.exit - m.job.arrival
         self.jobs.add(m.job)
 
     def send(self):
@@ -348,7 +354,7 @@ if __name__ == "__main__":
     server2.Out = server3
     server3.In = server2
     server3.Out = sink
-    sink.In = server1
+    sink.In = server3
 
 if __name__ == "__main__":
     source.start()
@@ -369,12 +375,15 @@ if __name__ == "__main__":
     for i, v in  stats.items():
         print(i, v*1./S, (1.-rho)*rho**i)
 
+ft = []
+while sink.jobs:
+    ft.append(sink.jobs.pop(0).flowtime)
+
+print(np.average(ft))
+
 print(source.numSentJobs)
 print(server1.jobsprocessed)
 print(server2.jobsprocessed)
 print(server1.jobsReceived)
 print(server3.jobsprocessed)
 print(sink.jobsreceived)
-
-for i in sink.jobs:
-    print(sink.jobs.pop(0).name)
