@@ -128,7 +128,7 @@ class Source(Node):
 
 
 class Server(Node, Machine):
-    def __init__(self, name):
+    def __init__(self, name, maxQueue):
         super().__init__(name)
         state = ['Processing', 'Idle', 'Maintenance', 'Failure', 'Blocked']
         Machine.__init__(self, states=state, initial='Idle')
@@ -143,7 +143,7 @@ class Server(Node, Machine):
         self.add_transition('unblocki', 'Blocked', 'Idle')
         self.add_transition('unblockp', 'Blocked', 'Processing')
         self.activeJob = None
-        self.maxQueue = 10
+        self.maxQueue = maxQueue
         self.numServers = 1
         self.busyServers = 0
         self.queue = None
@@ -164,7 +164,7 @@ class Server(Node, Machine):
                 job = self.queue.pop(0)
                 self.jobsprocessed +=1
                 self.start(job)
-                self.unblock()
+                if self.unblock()
                 #self.startService(job)
             else:
                 assert self.busyServers > 0
@@ -297,8 +297,8 @@ class Sink(Node):
     
 
 class Fifo(Server):
-    def __init__(self, name):
-        super().__init__(name)
+    def __init__(self, name, maxQueue = 5):
+        super().__init__(name, maxQueue)
         self.queue = SortedSet(key=lambda job: job.arrivalTime)
 
 
@@ -332,10 +332,11 @@ if __name__ == "__main__":
     source = Source()
     source.setTotalJobs( 1e4 )
     source.setTimeBetweenConsecutiveJobs(expon(scale = 1./labda))
-    server1 = Fifo('server1')
+    server1 = Fifo('server1', maxQueue=1000)
     server2 = Fifo('server2')
     server3 = Fifo('server3')
     server2.register(server1)       # register observer
+    server3.register(server2)
     #queue = SPTF()
     server1.setNumberOfServers(1)
     server1.setServiceTimeDistribution(expon(scale = 1./mu))
