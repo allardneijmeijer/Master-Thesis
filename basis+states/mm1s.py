@@ -1,6 +1,7 @@
 from collections import defaultdict
 from sortedcontainers import SortedSet
 from scipy.stats import expon
+from transitions import Machine
 import numpy as np
 
 class Event:
@@ -102,7 +103,7 @@ class Sender(Node):
     def send(self):
         self.numSentJobs += 1
         job = Job(name = "job: %d".format(self.numSentJobs))
-        m = Event(self, self.Out, self.scheduler.now(), job, event = "job")
+        m = Event(self, self.Out, self.scheduler.now(), job, event = "arrive")
         self.scheduler.add( m )
 
     def setTimeBetweenConsecutiveJobs(self, distribution):
@@ -141,10 +142,20 @@ class Observer:
         pass
 
 
-class Server:
+class Server(Machine):
     _ids = 0
 
     def __init__(self):
+        state = ['Up', 'Failed', 'Maintenance', 'Blocked']
+        Machine.__init__(self, states = state, initial='Up')
+        self.add_transition('start', 'Up', 'Up', after = "startJob")
+        self.add_transition('fail', 'Up', 'Failed')
+        self.add_transition('repair', 'Failed', 'Up')
+        self.add_transition('maintain', 'Up', 'Maintenance')
+        self.add_transition('maintcpl', 'Maintenance', 'Up')
+        self.add_transition('interrep', 'Failed', 'Maintenance')
+        self.add_transition('block', 'Up', 'Blocked')
+        self.add_transition('unblock', 'Blocked', 'Up')
         self.queue = SortedSet(key = lambda job: job.arrivalTime)
         self.numServers = 1
         Server._ids +=1
@@ -154,40 +165,52 @@ class Server:
         self.In = None
         self.Out = None
         self.scheduler = None
+        self.activejob = None
+        self.jobsarrived = 0
+        self.jobsprocessed = 0
 
-    def receive(self, m):
-        if m.event == "end":  # end of service
-            self.send(m.job)  
-            if len(self.queue) > 0:
-                assert self.busyServers == self.numServers
-                job = self.queue.pop(0)
-                self.startService(job)
-            else:
-                assert self.busyServers > 0
-                self.busyServers -= 1
-            #self.departureStats()
-        else: # receive new job
-            assert "job" in m.event
-            job = m.job
-            job.setArrivalTime(self.scheduler.now())
-            serviceTime =  self.serviceTimeDistribution.rvs()
-            job.setServiceTime(serviceTime)
-            job.log(self.scheduler.now(), "a", self.busyServers + len(self.queue))
-            if self.busyServers < self.numServers:
-                self.busyServers += 1
-                self.startService(job)
-            else:
-                self.queue.add(job)
+    #  Process logic #
 
-    def startService(self, job):
+    def startJob(self,job):
         job.log(self.scheduler.now(), "s", len(self.queue))
+        self.activejob = job
         t = self.scheduler.now() + job.serviceTime
         m = Event(self, self, t, job = job, event = "end")
         self.scheduler.add(m)
+
+    def end(self, m):
+        self.send(m.job)
+        self.jobsprocessed +=1
+        self.activejob = None
+        if len(self.queue) > 0:
+            job = self.queue.pop(0)
+            self.start(job)
+        else:
+            assert self.busyServers > 0
+            self.busyServers -= 1
+        #self.departureStats()
+
+    def arrive(self, m):
+        self.jobsarrived += 1
+        job = m.job
+        job.setArrivalTime(self.scheduler.now())
+        serviceTime =  self.serviceTimeDistribution.rvs()
+        job.setServiceTime(serviceTime)
+        job.log(self.scheduler.now(), "a", self.busyServers + len(self.queue))
+        if self.busyServers < self.numServers:
+            self.busyServers += 1
+            self.start(job)
+        else:
+            self.queue.add(job)
+
+    # End process logic #
+
+    def receive(self, m):
+        result = getattr(self, m.event)(m)
                 
     def send(self, job):  # job departure
         job.log(self.scheduler.now(), "d", len(self.queue))
-        m = Event(self, self.Out, self.scheduler.now(), job = job, event = "job")
+        m = Event(self, self.Out, self.scheduler.now(), job = job, event = "arrive")
         self.scheduler.add(m)
 
     def setServiceTimeDistribution(self, distribution):
@@ -269,3 +292,5 @@ class Simulator:
         S = sum(stats.values())
         for i, v in stats.items():
             print(i, v*1./S, (1.-self.rho)*self.rho**i)
+
+        print('Processed:', self.queue.jobsprocessed, 'Arrived:', self.queue.jobsarrived)

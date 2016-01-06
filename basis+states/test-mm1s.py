@@ -1,4 +1,4 @@
-import MM1 as sim
+import mm1s as sim
 from scipy.stats import expon
 import matplotlib.pylab as plt
 import numpy as np
