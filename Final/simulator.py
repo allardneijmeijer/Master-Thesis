@@ -34,7 +34,7 @@ class Scheduler(SortedSet):
         if self._now < self.endOfSimultationTime:
             super().add(m)
         
-    def pop(self):
+    def pop(self, index=0):
         m = super().pop(0)
         self._now = m.time
         m.t.receive(m)
@@ -49,10 +49,10 @@ class Scheduler(SortedSet):
     def deletejob(self, server, job):
         for index, value in enumerate(self):
             if value.job == job and value.t == server:
-                var = self[index]
+                # var = self[index]
                 del self[index]
-                #print('deleted', var.time, self.now())
-                #break
+                # print('deleted', var.time, self.now())
+                # break
 
     def deleteevent(self, server, event):
         for index, value in enumerate(self):
@@ -97,30 +97,13 @@ class Job:
         self.serviceTime = time
 
 
-class Node:
-    def __init__(self, name=""):
-        self.name = name
-        self.In = None
-        self.Out = None
-
-    def __repr__(self):
-        return self.name
-
-    def receive(self, m=None):
-        pass
-
-    def send(self, m=None):
-        pass
-
-
-class Sender(Node):
-    def __init__(self):
-        super().__init__(name="Sender")
-
-        self.interarrivaltime = None
-        self.totalJobs = 0
+class Sender:
+    def __init__(self, jobs, distrib):
+        self.name="Sender"
+        self.totalJobs = jobs
         self.numSentJobs = 0
         self.scheduler = None
+        self.timeBetweenConsecutiveJobs = distrib
 
     def receive(self, m):
         if m == self.generateNewJob:
@@ -135,13 +118,6 @@ class Sender(Node):
         job.sentTime = self.scheduler.now()
         m = Event(self, self.Out, self.scheduler.now(), job, event="arrive")
         self.scheduler.add(m)
-
-    def setTimeBetweenConsecutiveJobs(self, distribution):
-        self.timeBetweenConsecutiveJobs = distribution
-
-    def setTotalJobs(self, tot):
-        # total number of jobs to be generated
-        self.totalJobs = tot
         
     def start(self):
         self.generateNewJob = Event(self, self, 0, "Generate new job")
@@ -172,11 +148,32 @@ class Observer:
         pass
 
 
-class Server(Observer, Machine):
+class Queue(SortedSet, Observer):
+    def __init__(self, maxqueue):
+        super().__init__(key=lambda job: job.arrivalTime)
+        self.observers = []
+        self.maxqueue = maxqueue
+
+    def add(self, job):
+        super(Queue, self).add(job)
+        if len(self) >= self.maxqueue:
+            self.update_observers('block')
+
+    def pop(self, index=-1):
+        value = self._list.pop(index)
+        self._set.remove(value)
+        if len(self) < self.maxqueue:
+            self.update_observers('unblock')
+        return value
+
+
+class Server(Machine):
     _ids = 0
 
     def __init__(self, service, maxqueue, mtbf, mttr, mInt, mTime):
         super().__init__()
+
+        # initialize state machine
         state = ['Up', 'Failed', 'Maintenance', 'Blocked']
         Machine.__init__(self, states=state, initial='Up')
         self.add_transition('start', 'Up', 'Up', after='startJob')
@@ -188,28 +185,72 @@ class Server(Observer, Machine):
         self.add_transition('block', 'Up', 'Blocked')
         self.add_transition('unblock', 'Blocked', 'Up')
 
-        self.queue = SortedSet(key=lambda job: job.arrivalTime)
+        # initialize all kind of variables
+        self.queue = Queue(maxqueue) # = SortedSet(key=lambda job: job.arrivalTime)
         self.numServers = 1
         self.busyServers = 0
         self.mtbf = mtbf
         self.mttr = mttr
         self.maintInt = mInt
         self.maintTime = mTime
-        Server._ids += 1
         self.serviceTimeDistribution = service
+        self.blocked = False
+
+        Server._ids += 1
         self.name = 'Server {}'.format(Server._ids)
         self.In, self.Out, self.scheduler, self.activejob, self.interuptjob = None, None, None, None, None
-        self.ctime = []
-        self.logging = []
+        self.blocked = False
 
-        # debugging
+        # logging variables
         self.jobsarrived = 0
         self.jobsprocessed = 0
         self.jobsprocessed = 0
         self.numfailures = 0
         self.numMaint = 0
+        self.ctime = []
+        self.logging = []
+        self.idletime = 0
+        self.previdle = 0
+        self.startidle = 0
 
     # Process logic
+
+    def idleCount(self, var):
+        if var == "start":
+            self.startidle = self.scheduler.now()
+        elif var == "stop":
+            self.idletime += self.scheduler.now() - self.startidle
+
+    def receive(self, m):
+        result = getattr(self, m.event)(m)
+
+    def send(self, job):  # job departure
+        job.log(self.scheduler.now(), "d", len(self.queue))
+        self.log(self.scheduler.now(), "d", len(self.queue))
+        m = Event(self, self.Out, self.scheduler.now(), job=job, event="arrive")
+        self.scheduler.add(m)
+
+    def arrive(self, m):
+        self.jobsarrived += 1
+        job = m.job
+        job.setArrivalTime(self.scheduler.now())
+        serviceTime = self.serviceTimeDistribution.rvs()
+        job.setServiceTime(serviceTime)
+        job.log(self.scheduler.now(), "a", self.busyServers + len(self.queue))
+        self.log(self.scheduler.now(), "a", len(self.queue))
+        self.queue.add(m.job)
+        self.trystart()
+
+    def trystart(self):
+        #print(self.name, self.blocked, len(self.queue))
+        if len(self.queue) and self.busyServers < self.numServers and self.state == 'Up' and self.blocked == False:
+            job = self.queue.pop(0)
+            self.busyServers += 1
+            self.start(job)
+            self.idleCount('stop')
+            return True
+        else:
+            return False
 
     # starting and ending jobs #
     def startJob(self, job):
@@ -224,30 +265,41 @@ class Server(Observer, Machine):
     def end(self, m):
         self.send(m.job)
         self.jobsprocessed += 1
+        self.busyServers -= 1
+        self.idleCount('start')
         self.activejob = None
-        if len(self.queue) > 0 and self.state == 'Up':
-            job = self.queue.pop(0)
-            self.start(job)
-        else:
-            self.busyServers -= 1
         self.departureStats(m)
+        self.trystart()
 
     def departureStats(self, m):
         ctime = self.scheduler.now() - m.job.arrivalTime
         self.ctime.append(ctime)
 
-    # starting and ending jobs #
+    # Blocking
+    def update(self, arg):
+        #print(self.name, len(self.queue), self.blocked)
+        if arg == 'block':
+            self.blocked = True
+        elif arg == 'unblock':
+            self.blocked = False
+            if self.busyServers == 0:
+                self.trystart()
 
-    # Failures #
+    # Failures
     def rep(self, temp):
         if self.interuptjob:
             self.resumejob()
+        else:
+            self.trystart()
+            self.idleCount('start')
         if not self.scheduler.completed:
             self.generateFailure()
 
     def startFail(self, temp):
         if self.activejob:
             self.interuptJob()
+        else:
+            self.idleCount('stop')
         self.numfailures += 1
         #self.scheduler.printSelf()
         t = self.scheduler.now() + self.mttr #self.mttr.rvs()
@@ -258,12 +310,14 @@ class Server(Observer, Machine):
         t = self.scheduler.now() + self.mtbf #self.mtbf.rvs()
         m = Event(self, self, t, job=None, event="fail")
         self.scheduler.add(m)
-    # Failures #
 
-    # Maintenance #
+    # Maintenance
     def stopMaint(self, temp):
         if self.interuptjob:
             self.resumejob()
+        else:
+            self.trystart()
+            self.idleCount('start')
         if not self.scheduler.completed:
             self.generateFailure()
             self.generateMaintenance()
@@ -271,6 +325,8 @@ class Server(Observer, Machine):
     def startMaint(self, *args):
         if self.activejob:
             self.interuptJob()
+        else:
+            self.idleCount('stop')
         self.scheduler.deleteevent(self, 'fail')
         self.numMaint += 1
         t = self.scheduler.now() + self.maintTime #self.maintTime.rvs()
@@ -293,20 +349,7 @@ class Server(Observer, Machine):
         else:
             print('Wrong state')
 
-    # Maintenance #
-
-    def arrive(self, m):
-        self.arrivalInit(m)
-        if self.busyServers < self.numServers and self.state == 'Up':
-            self.busyServers += 1
-            self.start(m.job)
-        else:
-            self.queue.add(m.job)
-
-    # End process logic
-
-    def receive(self, m):
-        result = getattr(self, m.event)(m)
+    # Interupting job processing
 
     def interuptJob(self):
         self.interuptjob = self.activejob
@@ -321,21 +364,7 @@ class Server(Observer, Machine):
         m = Event(self, self, t, job=self.activejob, event="end")
         self.scheduler.add(m)
 
-    def arrivalInit(self, m):
-        self.jobsarrived += 1
-        job = m.job
-        job.setArrivalTime(self.scheduler.now())
-        serviceTime = self.serviceTimeDistribution.rvs()
-        job.setServiceTime(serviceTime)
-        job.log(self.scheduler.now(), "a", self.busyServers + len(self.queue))
-        self.log(self.scheduler.now(), "a", len(self.queue))
-                
-    def send(self, job):  # job departure
-        job.log(self.scheduler.now(), "d", len(self.queue))
-        self.log(self.scheduler.now(), "d", len(self.queue))
-        m = Event(self, self.Out, self.scheduler.now(), job=job, event="arrive")
-        self.scheduler.add(m)
-
+    # Logging and statistics gathering
     def log(self, *args):
         self.logging.append(args)
 
@@ -371,24 +400,14 @@ class Sink:
 
     def receive(self, m):
         self.jobs.append(m.job)
-        # print(len(self.jobs))
         m.job.finishTime = self.scheduler.now()
-        tp = m.job.finishTime - m.job.sentTime
-        self.tpTimes.append(tp)
+        self.tpTimes.append(m.job.finishTime - m.job.sentTime)
         if len(self.jobs) == self.sender.totalJobs:
             self.scheduler.completed = True
             self.scheduler.clear()
 
     def send(self):
         pass
-
-    def stats2(self, t):
-        count = defaultdict(int)
-        for j in self.jobs:
-            for l in j.logging:
-                if l[1] == t:
-                    count[l[2]] += 1
-        return count
 
     def throughput(self):
         avg = np.mean(self.tpTimes)
@@ -427,16 +446,15 @@ class Sink:
 class Simulator:
     def __init__(self, totaljobs, maxqueue, labda, mu, mtbf, mttr,  mInt, mTime):
         np.random.seed(1)
-        # initialize values
-        self.checkInput(mu, mtbf, mttr, mInt, mTime)     # check if numServers corresponds with number of contents in
-        # service  and all...
+        self.checkInput([mu, mtbf, mttr, mInt, mTime])
         self.numSrv = len(mu)
         arrival = expon(scale=1./labda)
 
-        # initialize nodes and values for servers
-        self.sender = Sender()
+        # initialize sender, scheduler and sink
+        self.sender = Sender(totaljobs, expon(scale=1./labda))
         self.scheduler = Scheduler()
         self.servers = []
+        # initialize all servers
         for nr in range(self.numSrv):
             service = expon(scale=1./mu[nr])
             # mtb = expon(scale=mtbf[nr])
@@ -452,7 +470,7 @@ class Simulator:
         self.sink = Sink()
         now = self.scheduler.now
 
-        # establish relations between nodes
+        # establish relations between nodes and scheduler
         self.sender.Out = self.servers[0]
         for i in range(len(self.servers)):
             if i != 0:
@@ -463,14 +481,20 @@ class Simulator:
         self.servers[0].In = self.sender
         self.servers[-1].Out = self.sink
         self.sink.In = self.servers[-1]
-
         self.sink.sender = self.sender
         self.scheduler.register(self.sender, self.sink)
 
-        # set parameters
-        self.sender.setTotalJobs(totaljobs)
-        self.sender.setTimeBetweenConsecutiveJobs(arrival)
+        # register server N as observer for server N-1
+        for server in self.servers:
+            if isinstance(server.In, Server):
+                server.queue.register(server.In)
+                #print(server.name,'registers',server.In.name, 'as observer')
 
+        # set parameters for simulation
+        #self.sender.setTotalJobs(totaljobs)
+        #self.sender.setTimeBetweenConsecutiveJobs(arrival)
+
+        # initialize failures and maintenance for all servers
         for i in range(len(self.servers)):
             self.servers[i].generateFailure()
             self.servers[i].generateMaintenance()
@@ -480,7 +504,7 @@ class Simulator:
     def runDebug(self):
         self.scheduler.run()
 
-        #create output
+        # create output
         print('Queue length distribution:')
         for i in range(self.numSrv):
             print('Server{}'.format(i))
@@ -499,33 +523,43 @@ class Simulator:
 
         print("Total time taken: {0:.2f} seconds".format(self.sink.totaltime()))
 
-        #prints log for last job.
+        total = self.sender.totalJobs / self.sink.totaltime()
+        print("Total throughput: {} items per second".format(total))
+
+        print('Idle percentage:')
+        for server in self.servers:
+            print('{0}: {1:.2f}'.format(server.name, server.idletime/self.sink.totaltime()*100),'%')
+
+        # prints log for last job. Uncomment for use
         # variable = self.sink.jobs[-1].logging
         # for i in range(len(variable)):
         #     print(variable[i])
 
-        # for job in self.sink.jobs:
-        #     if job.interupted:
-        #         print('----')
-        #         print(job.name)
-        #         for i in range(len(job.logging)):
-        #             print(job.logging[i])
-        #
-        # for job in self.sink.jobs:
-        #     if job.name == "job: 9715" or job.name == "job: 9716":
-        #         print('----')
-        #         print(job.name)
-        #         for i in range(len(job.logging)):
-        #             print(job.logging[i])
+    # Print job log of job with name
+    def printJobLog(self, name):
+        for job in self.sink.jobs:
+            if job.interupted:
+                print('----')
+                print(job.name)
+                for i in range(len(job.logging)):
+                    print(job.logging[i])
 
-    def checkInput(self, mu, mtbf, mttr, mInt, mTime):
-        if isinstance(mu, float) and isinstance(mtbf, float) and isinstance(mttr, float) and isinstance(mInt, float) and isinstance(mTime, float):
-            print('float')
-        elif len(mtbf) == len(mu) and len(mttr) == len(mu) and len(mInt) == len(mu) and len(mTime) == len(mu):
+    # check for input
+    def checkInput(self, values):
+        n = len(values[0])
+        if all(len(x) == n for x in values):
             pass
         else:
-            print('Error: input not correct')
+            print('Error in input! Check dimensions of input lists')
             exit()
+
+        # if isinstance(mu, float) and isinstance(mtbf, float) and isinstance(mttr, float) and isinstance(mInt, float) and isinstance(mTime, float):
+        #     print('float')
+        # elif len(mtbf) == len(mu) and len(mttr) == len(mu) and len(mInt) == len(mu) and len(mTime) == len(mu):
+        #     pass
+        # else:
+        #     print('Error: input not correct')
+        #     exit()
 
     def run(self):
         self.scheduler.run()
