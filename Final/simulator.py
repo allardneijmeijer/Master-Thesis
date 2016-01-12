@@ -196,8 +196,9 @@ class Server(Machine):
     handled by the scheduler (like ending a job at a certain time).
     """
     _ids = 0
+    stochastic = None
 
-    def __init__(self, service, maxqueue, mtbf, mttr, mInt, mTime):
+    def __init__(self, service, maxqueue, mtbf, mttr, mInt, mTime, stoch):
         super().__init__()
 
         # initialize state machine
@@ -222,6 +223,7 @@ class Server(Machine):
         self.maintTime = mTime
         self.serviceTimeDistribution = service
         self.blocked = False
+        Server.stochastic = stoch
 
         Server._ids += 1
         self.name = 'Server {}'.format(Server._ids)
@@ -329,12 +331,18 @@ class Server(Machine):
             self.idle_count('stop')
         self.numfailures += 1
         # self.scheduler.print_Self()
-        t = self.scheduler.now() + self.mttr  # self.mttr.rvs()
+        if Server.stochastic:
+            t = self.scheduler.now() + self.mttr.rvs()
+        else:
+            t = self.scheduler.now() + self.mttr
         m = Event(self, self, t, job=None, event="repair")
         self.scheduler.add(m)
 
     def generate_failure(self):
-        t = self.scheduler.now() + self.mtbf  # self.mtbf.rvs()
+        if Server.stochastic:
+            t = self.scheduler.now() + self.mtbf.rvs()
+        else:
+            t = self.scheduler.now() + self.mtbf
         m = Event(self, self, t, job=None, event="fail")
         self.scheduler.add(m)
 
@@ -356,12 +364,18 @@ class Server(Machine):
             self.idle_count('stop')
         self.scheduler.delete_event(self, 'fail')
         self.numMaint += 1
-        t = self.scheduler.now() + self.maintTime  # self.maintTime.rvs()
+        if Server.stochastic:
+            t = self.scheduler.now() + self.maintTime.rvs()
+        else:
+            t = self.scheduler.now() + self.maintTime
         m = Event(self, self, t, job=None, event="maintcpl")
         self.scheduler.add(m)
 
     def generate_maintenance(self):
-        t = self.scheduler.now() + self.maintInt  # self.maintInt.rvs()
+        if Server.stochastic:
+            t = self.scheduler.now() + self.maintInt.rvs()
+        else:
+            t = self.scheduler.now() + self.maintInt
         m = Event(self, self, t, job=None, event="trigger_maintenance")
         self.scheduler.add(m)
 
@@ -480,7 +494,7 @@ class Simulator:
     the number of servers needed, the parameters of these servers and the total amount of jobs. Also, relations between
     the nodes are made and the observer pattern is initialized.
     """
-    def __init__(self, totaljobs, maxqueue, labda, mu, mtbf, mttr,  mInt, mTime):
+    def __init__(self, totaljobs, maxqueue, labda, mu, mtbf, mttr,  mInt, mTime, stoch):
         np.random.seed(1)
         self.checkInput([mu, mtbf, mttr, mInt, mTime])
         self.numSrv = len(mu)
@@ -490,19 +504,24 @@ class Simulator:
         self.scheduler = Scheduler()
         self.servers = []
         # initialize all servers
-        for nr in range(self.numSrv):
-            service = expon(scale=1./mu[nr])
-            # mtb = expon(scale=mtbf[nr])
-            # mtt = expon(scale=mttr[nr])
-            # mIn = expon(scale=mInt[nr])
-            # mTim = expon(scale=mTime[nr])
-            ### currently deterministic failures and maintenance.
-            mtb = mtbf[nr]
-            mtt = mttr[nr]
-            mIn = mInt[nr]
-            mTim = mTime[nr]
-            mq = maxqueue[nr]
-            self.servers.append(Server(service, mq, mtbf=mtb, mttr=mtt, mInt=mIn, mTime=mTim))
+        if stoch is True:
+            for nr in range(self.numSrv):
+                service = expon(scale=1./mu[nr])
+                mtb = expon(scale=mtbf[nr])
+                mtt = expon(scale=mttr[nr])
+                mIn = expon(scale=mInt[nr])
+                mTim = expon(scale=mTime[nr])
+                mq = maxqueue[nr]
+                self.servers.append(Server(service, mq, mtbf=mtb, mttr=mtt, mInt=mIn, mTime=mTim, stoch=stoch))
+        else:
+            for nr in range(self.numSrv):
+                service = expon(scale=1./mu[nr])
+                mtb = mtbf[nr]
+                mtt = mttr[nr]
+                mIn = mInt[nr]
+                mTim = mTime[nr]
+                mq = maxqueue[nr]
+                self.servers.append(Server(service, mq, mtbf=mtb, mttr=mtt, mInt=mIn, mTime=mTim, stoch=stoch))
         self.sink = Sink()
 
         # establish relations between nodes and scheduler
@@ -510,7 +529,7 @@ class Simulator:
         for i in range(len(self.servers)):
             if i != 0:
                 self.servers[i].In = self.servers[i - 1]
-            if i != (len(self.servers) -1):
+            if i != (len(self.servers) - 1):
                 self.servers[i].Out = self.servers[i + 1]
             self.scheduler.register(self.servers[i])
         self.servers[0].In = self.sender
@@ -550,6 +569,9 @@ class Simulator:
                   self.servers[i].numMaint)
 
         print('Cycle time: {:.5} seconds'.format(self.sink.throughput()))
+
+        for i in range(self.numSrv):
+            print("Server {} has max queue length: {}".format(i, max(self.servers[i].arrival_stats())))
 
         for i in range(self.numSrv):
             print("Server {} has CT: {:.5} seconds".format(i, np.mean(self.servers[i].ctime)))
